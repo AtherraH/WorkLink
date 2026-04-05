@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { useAuth } from '../../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { io } from 'socket.io-client';
+import { useAuth } from '../../context/AuthContext';
+
+const adminSocket = io('http://localhost:5000');
 
 const AdminDashboard = () => {
   const { user, token, logout } = useAuth();
@@ -11,6 +14,7 @@ const AdminDashboard = () => {
   const [users, setUsers] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [disputes, setDisputes] = useState([]);
+  const [warnedUsers, setWarnedUsers] = useState({});
   const [actions, setActions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [userFilter, setUserFilter] = useState('all');
@@ -22,6 +26,7 @@ const AdminDashboard = () => {
       return;
     }
     fetchAll();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchAll = async () => {
@@ -94,7 +99,7 @@ const AdminDashboard = () => {
   };
 
   const banUser = async (userId, userName) => {
-    const reason = prompt(`Enter reason for banning ${userName}:`);
+    const reason = prompt(`Enter reason for banning ${userName} (10 days):`);
     if (!reason) return;
     try {
       await axios.put(
@@ -102,7 +107,8 @@ const AdminDashboard = () => {
         { reason },
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      alert(`${userName} has been banned.`);
+      alert(`${userName} has been banned for 10 days.`);
+      adminSocket.emit('admin_notify_user', { userId, notification: { type: 'ban', message: `Your account has been banned for 10 days. Reason: ${reason}. Contact support if you have questions.` } });
       fetchUsers();
       fetchActions();
       fetchStats();
@@ -120,6 +126,7 @@ const AdminDashboard = () => {
         { headers: { Authorization: `Bearer ${token}` } }
       );
       alert(`${userName} has been unbanned.`);
+      adminSocket.emit('admin_notify_user', { userId, notification: { type: 'resolve', message: `Your account ban has been lifted. You can now access the platform again. Welcome back!` } });
       fetchUsers();
       fetchActions();
       fetchStats();
@@ -138,6 +145,8 @@ const AdminDashboard = () => {
         { headers: { Authorization: `Bearer ${token}` } }
       );
       alert(`Warning issued to ${userName}.`);
+      setWarnedUsers(prev => ({ ...prev, [userId]: true }));
+      adminSocket.emit('admin_notify_user', { userId, notification: { type: 'warn', message: `You have received a warning from admin. Reason: ${reason}. Please review the platform guidelines.` } });
       fetchUsers();
       fetchActions();
     } catch (err) {
@@ -195,7 +204,7 @@ const AdminDashboard = () => {
             Logged in as {user.full_name} &nbsp;|&nbsp; Platform Management
           </p>
         </div>
-        <button style={styles.btnSecondary} onClick={logout}>
+        <button style={styles.btnSecondary} onClick={() => { logout(); navigate('/login'); }}>
           Logout
         </button>
       </div>
@@ -352,38 +361,26 @@ const AdminDashboard = () => {
                     <td style={styles.td}>
                       {u.role !== 'admin' && (
                         <div style={styles.actionBtns}>
-                          {!u.is_banned && (
-                            <button
-                              style={styles.btnWarn}
-                              onClick={() => warnUser(u.id, u.full_name)}
-                            >
-                              Warn
-                            </button>
-                          )}
-                          {!u.is_banned && (
-                            <button
-                              style={styles.btnBan}
-                              onClick={() => banUser(u.id, u.full_name)}
-                            >
-                              Ban
-                            </button>
-                          )}
-                          {u.is_banned && (
-                            <button
-                              style={styles.btnUnban}
-                              onClick={() => unbanUser(u.id, u.full_name)}
-                            >
-                              Unban
-                            </button>
-                          )}
                           {u.role === 'worker' && (
-                            <button
-                              style={styles.btnView}
-                              onClick={() => navigate(`/worker/${u.id}`)}
-                            >
+                            <button style={styles.btnView} onClick={() => navigate(`/worker/${u.id}`)}>
                               Profile
                             </button>
                           )}
+                          {u.role === 'customer' && (
+                            <button style={styles.btnView} onClick={() => navigate(`/customer-profile/${u.id}`)}>
+                              Profile
+                            </button>
+                          )}
+                          {!u.is_banned ? (
+                            <button style={styles.btnBan} onClick={() => banUser(u.id, u.full_name)}>
+                              🚫 Ban
+                            </button>
+                          ) : (
+                            <button style={styles.btnUnban} onClick={() => unbanUser(u.id, u.full_name)}>
+                              ✅ Unban
+                            </button>
+                          )}
+
                         </div>
                       )}
                     </td>
@@ -544,28 +541,54 @@ const AdminDashboard = () => {
                     </div>
                   )}
 
-                  {dispute.status === 'open' && (
-                    <div style={styles.disputeActions}>
-                      <button
-                        style={styles.btnResolve}
-                        onClick={() => resolveDispute(dispute.id)}
-                      >
-                        ✅ Resolve
+                  <div style={styles.disputeActions}>
+                    {/* Open Dispute Chat — always visible */}
+                    <button
+                      style={styles.btnDisputeChat}
+                      onClick={() => navigate(`/dispute-chat/${dispute.id}`)}
+                    >
+                      💬 Open Dispute Chat
+                    </button>
+
+                    {dispute.status === 'open' && (
+                      <>
+                        <button style={styles.btnResolve} onClick={() => resolveDispute(dispute.id)}>
+                          ✅ Resolve & Close
+                        </button>
+                        {!warnedUsers[dispute.reported_id] ? (
+                          <button style={styles.btnWarn} onClick={() => warnUser(dispute.reported_id, dispute.reported_name)}>
+                            ⚠️ Warn {dispute.reported_name?.split(' ')[0]}
+                          </button>
+                        ) : (
+                          <button style={{ ...styles.btnWarn, backgroundColor: '#fef3c7', color: '#92400e', cursor: 'default' }} disabled>
+                            ⚠️ Warning Sent
+                          </button>
+                        )}
+                        {!dispute.reported_banned ? (
+                          <button style={styles.btnBan} onClick={() => banUser(dispute.reported_id, dispute.reported_name)}>
+                            🚫 Ban {dispute.reported_name?.split(' ')[0]}
+                          </button>
+                        ) : (
+                          <button style={styles.btnUnban} onClick={() => unbanUser(dispute.reported_id, dispute.reported_name)}>
+                            ✅ Unban {dispute.reported_name?.split(' ')[0]}
+                          </button>
+                        )}
+
+                      </>
+                    )}
+                    {dispute.status !== 'open' && (
+                      <button style={{ ...styles.btnResolve, backgroundColor: '#fef3c7', color: '#92400e', border: '1px solid #fcd34d' }}
+                        onClick={async () => {
+                          if (!window.confirm('Reopen this dispute?')) return;
+                          try {
+                            await axios.put(`http://localhost:5000/api/disputes/${dispute.id}/reopen`, {}, { headers: { Authorization: `Bearer ${token}` } });
+                            fetchDisputes();
+                          } catch(e) { alert('Failed to reopen dispute.'); }
+                        }}>
+                        ↩️ Reopen Dispute
                       </button>
-                      <button
-                        style={styles.btnWarn}
-                        onClick={() => warnUser(dispute.reported_id, dispute.reported_name)}
-                      >
-                        ⚠️ Warn Reported
-                      </button>
-                      <button
-                        style={styles.btnBan}
-                        onClick={() => banUser(dispute.reported_id, dispute.reported_name)}
-                      >
-                        🚫 Ban Reported
-                      </button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -627,6 +650,7 @@ const AdminDashboard = () => {
           )}
         </div>
       )}
+
     </div>
   );
 };
@@ -710,6 +734,7 @@ const styles = {
     backgroundColor: '#ede9fe', color: '#4f46e5', border: 'none',
     padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px',
   },
+  btnDisputeChat: { backgroundColor: '#4f46e5', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' },
   btnResolve: {
     backgroundColor: '#4f46e5', color: '#fff', border: 'none',
     padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px',

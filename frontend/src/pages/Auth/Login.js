@@ -25,7 +25,11 @@ const Login = () => {
       const data = res.data;
     login(data.user, data.token);
 
-     navigate('/');
+    // Redirect to role-specific dashboard
+    const role = data.user.role;
+    if (role === 'admin') navigate('/admin');
+    else if (role === 'worker') navigate('/worker-dashboard');
+    else navigate('/customer-dashboard');
 
     } catch (err) {
       setError(err.response?.data?.message || 'Login failed. Please try again.');

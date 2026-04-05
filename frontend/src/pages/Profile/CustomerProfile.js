@@ -1,22 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
-import 'leaflet/dist/leaflet.css';
-import L from 'leaflet';
-
-delete L.Icon.Default.prototype._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
-  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
-});
-const MapRecenter = ({ lat, lng }) => {
-  const map = useMap();
-  useEffect(() => { map.setView([lat, lng], 15); }, [lat, lng]); // eslint-disable-line
-  return null;
-};
 
 const CustomerProfile = () => {
   const { user, token } = useAuth();
@@ -25,12 +10,9 @@ const CustomerProfile = () => {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ full_name: '', phone: '' });
+  const [form, setForm] = useState({ full_name: '', phone: '', address: '' });
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
-  const [myLocation, setMyLocation] = useState(null);
-  const [locError, setLocError] = useState('');
-  const [lastLocUpdate, setLastLocUpdate] = useState(null);
 
   useEffect(() => {
     if (!user) return;
@@ -48,34 +30,13 @@ const CustomerProfile = () => {
       setForm({
         full_name: res.data.user.full_name,
         phone: res.data.user.phone,
+        address: res.data.user.address || '',
       });
     } catch (err) {
       console.error('Failed to fetch profile:', err.message);
     } finally {
       setLoading(false);
     }
-  };
-
-  const detectLocation = () => {
-    if (!navigator.geolocation) { setLocError('Geolocation not supported.'); return; }
-    setLocError('');
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const { latitude, longitude, accuracy } = pos.coords;
-        console.log(`[Customer GPS] lat=${latitude.toFixed(6)}, lng=${longitude.toFixed(6)}, accuracy=${accuracy}m`);
-        setMyLocation({ latitude, longitude, accuracy });
-        setLastLocUpdate(new Date().toLocaleTimeString());
-        try {
-          await axios.put('http://localhost:5000/api/workers/location', { latitude, longitude },
-            { headers: { Authorization: `Bearer ${token}` } });
-        } catch (e) {}
-      },
-      (err) => {
-        const msgs = { 1: 'Permission denied. Allow location in browser settings.', 2: 'Position unavailable.', 3: 'Timed out.' };
-        setLocError(msgs[err.code] || err.message);
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-    );
   };
 
   const fetchMyJobs = async () => {
@@ -181,6 +142,19 @@ const CustomerProfile = () => {
               )}
             </div>
             <div style={styles.infoItem}>
+              <p style={styles.infoLabel}>Address</p>
+              {editing ? (
+                <input
+                  style={styles.editInput}
+                  value={form.address}
+                  placeholder="Your full address"
+                  onChange={(e) => setForm({ ...form, address: e.target.value })}
+                />
+              ) : (
+                <p style={styles.infoValue}>{profile.address || '—'}</p>
+              )}
+            </div>
+            <div style={styles.infoItem}>
               <p style={styles.infoLabel}>Member Since</p>
               <p style={styles.infoValue}>
                 {new Date(profile.created_at).toLocaleDateString()}
@@ -233,14 +207,13 @@ const CustomerProfile = () => {
 
       {/* Tabs */}
       <div style={styles.tabs}>
-        {['overview', 'location', 'history'].map((tab) => (
+        {['overview', 'history'].map((tab) => (
           <button
             key={tab}
             style={activeTab === tab ? styles.tabActive : styles.tab}
             onClick={() => setActiveTab(tab)}
           >
             {tab === 'overview' && '📋 Overview'}
-            {tab === 'location' && '📍 My Location'}
             {tab === 'history' && `📜 Job History (${jobs.length})`}
           </button>
         ))}
@@ -304,56 +277,6 @@ const CustomerProfile = () => {
               </div>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* Location Tab */}
-      {activeTab === 'location' && (
-        <div style={styles.content}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
-            <div>
-              <h3 style={{ ...styles.sectionTitle, marginBottom: '4px' }}>📍 My Location</h3>
-              <p style={{ fontSize: '13px', color: '#666', margin: 0 }}>Your GPS location helps match nearby workers to your jobs</p>
-            </div>
-            <button onClick={detectLocation} style={styles.btnDetect}>🎯 Detect My Location</button>
-          </div>
-
-          {locError && <div style={styles.locError}>⚠️ {locError}</div>}
-          {lastLocUpdate && <div style={styles.locUpdated}>✅ Location detected at {lastLocUpdate}</div>}
-
-          {myLocation ? (
-            <>
-              <div style={styles.coordRow}>
-                <span style={styles.coordBadge}>Lat: {parseFloat(myLocation.latitude).toFixed(6)}</span>
-                <span style={styles.coordBadge}>Lng: {parseFloat(myLocation.longitude).toFixed(6)}</span>
-                {myLocation.accuracy && <span style={{ ...styles.coordBadge, backgroundColor: '#d1fae5' }}>±{Math.round(myLocation.accuracy)}m</span>}
-              </div>
-              <div style={{ borderRadius: '12px', overflow: 'hidden', marginTop: '12px' }}>
-                <MapContainer
-                  center={[parseFloat(myLocation.latitude), parseFloat(myLocation.longitude)]}
-                  zoom={15}
-                  style={{ height: '350px', width: '100%' }}
-                  key={`${myLocation.latitude}-${myLocation.longitude}`}
-                >
-                  <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy; OpenStreetMap contributors' />
-                  <MapRecenter lat={parseFloat(myLocation.latitude)} lng={parseFloat(myLocation.longitude)} />
-                  <Marker position={[parseFloat(myLocation.latitude), parseFloat(myLocation.longitude)]}>
-                    <Popup>
-                      <strong>📍 My Location</strong><br />
-                      {parseFloat(myLocation.latitude).toFixed(5)}, {parseFloat(myLocation.longitude).toFixed(5)}
-                      {myLocation.accuracy && <><br />±{Math.round(myLocation.accuracy)}m accuracy</>}
-                    </Popup>
-                  </Marker>
-                </MapContainer>
-              </div>
-            </>
-          ) : (
-            <div style={styles.noLocBox}>
-              <p style={{ fontSize: '40px', margin: '0 0 12px 0' }}>🗺️</p>
-              <p style={{ fontWeight: 'bold', fontSize: '16px', color: '#333', margin: '0 0 6px 0' }}>No location set yet</p>
-              <p style={{ fontSize: '13px', color: '#999' }}>Click "Detect My Location" to use your device's GPS</p>
-            </div>
-          )}
         </div>
       )}
 
@@ -532,12 +455,6 @@ const styles = {
     backgroundColor: '#4f46e5', color: '#fff', border: 'none',
     padding: '12px 24px', borderRadius: '8px', cursor: 'pointer', fontSize: '15px',
   },
-  btnDetect: { backgroundColor: '#4f46e5', color: '#fff', border: 'none', padding: '10px 18px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' },
-  locError: { backgroundColor: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca', borderRadius: '8px', padding: '10px 14px', fontSize: '13px', marginBottom: '12px' },
-  locUpdated: { backgroundColor: '#d1fae5', color: '#065f46', borderRadius: '8px', padding: '8px 14px', fontSize: '13px', marginBottom: '12px' },
-  coordRow: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '4px' },
-  coordBadge: { backgroundColor: '#ede9fe', color: '#4f46e5', padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '600', fontFamily: 'monospace' },
-  noLocBox: { textAlign: 'center', padding: '40px', backgroundColor: '#f8fafc', borderRadius: '12px' },
 };
 
 export default CustomerProfile;

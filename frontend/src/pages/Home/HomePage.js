@@ -27,8 +27,15 @@ const HomePage = () => {
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
+    // If already logged in, redirect to their dashboard
+    if (user) {
+      if (user.role === 'admin') navigate('/admin');
+      else if (user.role === 'worker') navigate('/worker-dashboard');
+      else navigate('/customer-dashboard');
+      return;
+    }
     fetchJobs();
-  }, []);
+  }, [user]);
 
   const fetchJobs = async () => {
     try {
@@ -59,7 +66,8 @@ const HomePage = () => {
       job.description?.toLowerCase().includes(search.toLowerCase());
     const matchCategory =
       !selectedCategory ||
-      job.labor_type.toLowerCase() === selectedCategory.toLowerCase();
+      (job.labor_type || '').toLowerCase().includes(selectedCategory.toLowerCase()) ||
+      selectedCategory.toLowerCase().includes((job.labor_type || '').toLowerCase());
     return matchSearch && matchCategory;
   });
 

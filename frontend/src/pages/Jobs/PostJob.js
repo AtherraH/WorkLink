@@ -14,8 +14,11 @@ const PostJob = () => {
     description: '',
     rate: '',
     location: '',
-    workers_needed: 1,
     urgency: 'urgent',
+    scheduled_date: '',
+    scheduled_hour: '12',
+    scheduled_minute: '00',
+    scheduled_ampm: 'AM',
     scheduled_time: '',
   });
 
@@ -58,10 +61,15 @@ const PostJob = () => {
       data.append('description', formData.description);
       data.append('rate', formData.rate);
       data.append('location', formData.location);
-      data.append('workers_needed', formData.workers_needed);
       data.append('urgency', formData.urgency);
-      if (formData.urgency === 'scheduled' && formData.scheduled_time) {
-        data.append('scheduled_time', formData.scheduled_time);
+      if (formData.urgency === 'scheduled' && formData.scheduled_date) {
+        // Convert 12h parts to 24h ISO datetime for the backend
+        let hour = parseInt(formData.scheduled_hour, 10);
+        if (formData.scheduled_ampm === 'PM' && hour !== 12) hour += 12;
+        if (formData.scheduled_ampm === 'AM' && hour === 12) hour = 0;
+        const hh = String(hour).padStart(2, '0');
+        const scheduled_time = `${formData.scheduled_date}T${hh}:${formData.scheduled_minute}:00`;
+        data.append('scheduled_time', scheduled_time);
       }
       if (photo) {
         data.append('photo', photo);
@@ -87,6 +95,13 @@ const PostJob = () => {
   return (
     <div style={styles.container}>
       <div style={styles.card}>
+        <button
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#4f46e5',
+            fontWeight: '600', fontSize: '14px', padding: '0 0 16px 0', display: 'flex', alignItems: 'center', gap: '4px' }}
+          onClick={() => navigate('/customer-dashboard')}
+        >
+          ← Back to Dashboard
+        </button>
         <h2 style={styles.title}>Post a Job</h2>
         <p style={styles.subtitle}>Describe what help you need</p>
 
@@ -145,15 +160,6 @@ const PostJob = () => {
             required
           />
 
-          <input
-            style={styles.input}
-            type="number"
-            name="workers_needed"
-            placeholder="Number of Workers Needed"
-            value={formData.workers_needed}
-            onChange={handleChange}
-            min="1"
-          />
 
           <select
             style={styles.input}
@@ -167,14 +173,48 @@ const PostJob = () => {
 
           {/* Show date/time picker only for scheduled jobs */}
           {formData.urgency === 'scheduled' && (
-            <input
-              style={styles.input}
-              type="datetime-local"
-              name="scheduled_time"
-              value={formData.scheduled_time}
-              onChange={handleChange}
-              required
-            />
+            <div>
+              <label style={styles.label}>Scheduled Date &amp; Time</label>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <input
+                  style={{ ...styles.input, flex: '2', minWidth: '140px', marginBottom: 0 }}
+                  type="date"
+                  name="scheduled_date"
+                  value={formData.scheduled_date}
+                  onChange={handleChange}
+                  required
+                />
+                <select
+                  style={{ ...styles.input, flex: '1', minWidth: '70px', marginBottom: 0 }}
+                  name="scheduled_hour"
+                  value={formData.scheduled_hour}
+                  onChange={handleChange}
+                >
+                  {Array.from({length:12},(_,i)=>String(i+1).padStart(2,'0')).map(h=>(
+                    <option key={h} value={h}>{h}</option>
+                  ))}
+                </select>
+                <select
+                  style={{ ...styles.input, flex: '1', minWidth: '70px', marginBottom: 0 }}
+                  name="scheduled_minute"
+                  value={formData.scheduled_minute}
+                  onChange={handleChange}
+                >
+                  {['00','15','30','45'].map(m=>(
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+                <select
+                  style={{ ...styles.input, flex: '1', minWidth: '70px', marginBottom: 0 }}
+                  name="scheduled_ampm"
+                  value={formData.scheduled_ampm}
+                  onChange={handleChange}
+                >
+                  <option value="AM">AM</option>
+                  <option value="PM">PM</option>
+                </select>
+              </div>
+            </div>
           )}
 
           {/* Photo upload */}

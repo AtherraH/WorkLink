@@ -12,18 +12,22 @@ const rateWorker = async (req, res) => {
   try {
     // Verify job is completed and belongs to customer
     const jobCheck = await pool.query(
-      `SELECT j.*, aw.worker_id
+      `SELECT j.id, j.status, j.customer_id, aw.worker_id
        FROM jobs j
        LEFT JOIN assigned_workers aw ON aw.job_id = j.id
-       WHERE j.id = $1 AND j.customer_id = $2 AND j.status = 'completed'`,
+       WHERE j.id = $1 AND j.customer_id = $2`,
       [jobId, customerId]
     );
 
     if (jobCheck.rows.length === 0) {
-      return res.status(404).json({ message: 'Job not found or not completed.' });
+      return res.status(404).json({ message: 'Job not found or does not belong to you.' });
     }
 
     const job = jobCheck.rows[0];
+
+    if (job.status !== 'completed') {
+      return res.status(400).json({ message: 'You can only review completed jobs.' });
+    }
 
     if (!job.worker_id) {
       return res.status(400).json({ message: 'No worker assigned to this job.' });
@@ -38,7 +42,7 @@ const rateWorker = async (req, res) => {
       return res.status(400).json({ message: 'You have already rated this job.' });
     }
 
-    // Save the rating
+    // Save rating
     await pool.query(
       `INSERT INTO ratings (job_id, customer_id, worker_id, score, review)
        VALUES ($1, $2, $3, $4, $5)`,
@@ -61,13 +65,13 @@ const rateWorker = async (req, res) => {
     );
 
     res.status(201).json({
-      message: 'Rating submitted successfully!',
+      message: 'Thank you for your review!',
       rating: { job_id: jobId, score, review: review || null, worker_new_rating: avgRating, total_ratings: totalRatings },
     });
 
   } catch (err) {
     console.error('Rate worker error:', err.message);
-    res.status(500).json({ message: 'Server error submitting rating.' });
+    res.status(500).json({ message: 'Server error submitting rating: ' + err.message });
   }
 };
 
@@ -76,7 +80,8 @@ const getWorkerRatings = async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT r.score, r.review, r.created_at,
-              u.full_name AS customer_name, j.title AS job_title
+              u.full_name AS customer_name,
+              j.title AS job_title
        FROM ratings r
        JOIN users u ON u.id = r.customer_id
        JOIN jobs j ON j.id = r.job_id

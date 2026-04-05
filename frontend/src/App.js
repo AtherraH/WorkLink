@@ -17,10 +17,12 @@ import Chat from './pages/Chat/Chat';
 import Chatbot from './pages/Chat/Chatbot';
 import TrackWorker from './pages/Map/TrackWorker';
 import AdminDashboard from './pages/Admin/AdminDashboard';
+import AdminCustomerProfile from './pages/Admin/AdminCustomerProfile';
 import CustomerDashboard from './pages/Dashboard/CustomerDashboard';
 import WorkerDashboard from './pages/Dashboard/WorkerDashboard';
 import CustomerProfile from './pages/Profile/CustomerProfile';
 import WorkerProfilePage from './pages/Profile/WorkerProfilePage';
+import DisputeChat from './pages/Disputes/DisputeChat';
 
 function App() {
   return (
@@ -42,10 +44,13 @@ function App() {
           <Route path="/chat/:jobId" element={<Chat />} />
           <Route path="/track/:jobId" element={<TrackWorker />} />
           <Route path="/admin" element={<AdminDashboard />} />
+          <Route path="/admin/customer/:userId" element={<AdminCustomerProfile />} />
           <Route path="/customer-dashboard" element={<CustomerDashboard />} />
           <Route path="/worker-dashboard" element={<WorkerDashboard />} />
           <Route path="/customer-profile" element={<CustomerProfile />} />
           <Route path="/worker-profile" element={<WorkerProfilePage />} />
+          {/* Dispute Chat — accessible by customers, workers, and admin */}
+          <Route path="/dispute-chat/:disputeId" element={<DisputeChat />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
         <Chatbot />

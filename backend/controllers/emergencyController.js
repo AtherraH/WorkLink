@@ -84,7 +84,9 @@ const checkNoShow = async (req, res) => {
 
     const deadline = new Date(deadlineRaw);
     const now = new Date();
-    const minutesElapsed = Math.max(0, Math.floor((now - (deadline - 30*60*1000)) / 60000));
+    // The 30-min window always starts 30 minutes before the deadline
+    const windowStart = new Date(deadline.getTime() - 30 * 60 * 1000);
+    const minutesElapsed = Math.max(0, Math.min(30, Math.floor((now - windowStart) / 60000)));
     const minutesLeft   = Math.max(0, Math.floor((deadline - now) / 60000));
     const isLate = now > deadline;
 
@@ -316,14 +318,14 @@ const chooseBackupWorker = async (req, res) => {
     });
 
     // Reset deadline for backup worker:
-    // scheduled jobs: scheduled_time + 30min (same original deadline)
+    // scheduled jobs: keep deadline = scheduled_time (same logic as initial assignment)
     // urgent jobs: NOW + 30min (fresh window for backup)
     const jobInfo = await pool.query(
       `SELECT urgency, scheduled_time FROM jobs WHERE id = $1`, [jobId]
     );
     const jInfo = jobInfo.rows[0];
     const newDeadline = (jInfo?.urgency === 'scheduled' && jInfo?.scheduled_time)
-      ? new Date(new Date(jInfo.scheduled_time).getTime() + 30 * 60000).toISOString()
+      ? new Date(jInfo.scheduled_time).toISOString()
       : new Date(Date.now() + 30 * 60000).toISOString();
 
     await pool.query(

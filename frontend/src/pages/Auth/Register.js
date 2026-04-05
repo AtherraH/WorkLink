@@ -12,6 +12,7 @@ const Register = () => {
     password: '',
     role: 'customer',
     skills: '',
+    address: '',
   });
 
   const [error, setError] = useState('');
@@ -92,6 +93,23 @@ const Register = () => {
             onChange={handleChange}
             required
           />
+
+          {/* Address — customers only */}
+          {formData.role === 'customer' && (
+            <div>
+              <label style={{ fontSize: '13px', fontWeight: '600', color: '#374151', display: 'block', marginBottom: '4px' }}>
+                📍 Enter your full address
+              </label>
+              <textarea
+                style={{ ...styles.input, height: '72px', resize: 'none', fontFamily: 'inherit' }}
+                name="address"
+                placeholder="House/Flat No., Street, City, District, PIN Code"
+                value={formData.address}
+                onChange={handleChange}
+                required
+              />
+            </div>
+          )}
 
           {/* Role selector */}
           <select

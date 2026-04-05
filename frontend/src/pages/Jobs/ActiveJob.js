@@ -278,7 +278,7 @@ const ActiveJob = () => {
               </p>
               <p style={styles.timerSub}>
                 {job.urgency === 'scheduled' && job.scheduled_time
-                  ? `Scheduled: ${new Date(job.scheduled_time).toLocaleString()}`
+                  ? `Scheduled: ${new Date(job.scheduled_time).toLocaleString([], { hour12: true })}`
                   : 'Worker has 30 minutes to arrive after assignment'}
               </p>
             </div>
@@ -421,7 +421,7 @@ const ActiveJob = () => {
               <div style={styles.scheduledBox}>
                 <p style={styles.scheduledLabel}>📅 Scheduled Time</p>
                 <p style={styles.scheduledValue}>
-                  {new Date(job.scheduled_time).toLocaleString()}
+                  {new Date(job.scheduled_time).toLocaleString([], { hour12: true })}
                 </p>
               </div>
             )}
@@ -454,7 +454,7 @@ const ActiveJob = () => {
                 </p>
                 {otp.expires_at && (
                   <p style={styles.otpExpiry}>
-                    Expires: {new Date(otp.expires_at).toLocaleTimeString()}
+                    Expires: {new Date(otp.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}
                   </p>
                 )}
               </div>
@@ -495,13 +495,7 @@ const ActiveJob = () => {
             >
               💬 Open Chat
             </button>
-            {job.customer_phone && (
-              <div style={{ marginTop: '12px' }}>
-                <a href={`tel:${job.customer_phone}`} style={styles.btnCall}>
-                  📞 Call
-                </a>
-              </div>
-            )}
+
           </div>
         )}
 
@@ -516,7 +510,7 @@ const ActiveJob = () => {
               <div style={{ backgroundColor: '#d1fae5', padding: '20px', borderRadius: '12px', textAlign: 'center' }}>
                 <p style={{ fontSize: '32px', margin: '0 0 8px 0' }}>✅</p>
                 <p style={{ fontWeight: 'bold', color: '#065f46', fontSize: '16px', margin: '0 0 4px 0' }}>Job Completed!</p>
-                <p style={{ color: '#065f46', fontSize: '13px', margin: 0 }}>Exit time: {exitTime.toLocaleString()}</p>
+                <p style={{ color: '#065f46', fontSize: '13px', margin: 0 }}>Exit time: {exitTime.toLocaleString([], { hour12: true })}</p>
               </div>
             ) : (
               <div style={{ backgroundColor: '#f0fdf4', border: '2px solid #10b981', borderRadius: '12px', padding: '20px' }}>
@@ -817,10 +811,7 @@ const styles = {
     padding: '12px 24px', borderRadius: '8px', cursor: 'pointer',
     fontSize: '15px', fontWeight: 'bold', display: 'block', width: '100%', marginTop: '16px',
   },
-  btnCall: {
-    display: 'block', backgroundColor: '#10b981', color: '#fff', padding: '12px',
-    borderRadius: '8px', textAlign: 'center', textDecoration: 'none', fontSize: '15px',
-  },
+
   paySteps: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     marginBottom: '24px', flexWrap: 'wrap', gap: '4px',

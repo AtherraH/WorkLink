@@ -5,7 +5,7 @@ import { useAuth } from '../../context/AuthContext';
 
 const JobManage = () => {
   const { jobId } = useParams();
-  const { user, token } = useAuth();
+  const { token } = useAuth();
   const navigate = useNavigate();
   const [job, setJob] = useState(null);
   const [applicants, setApplicants] = useState([]);
@@ -18,14 +18,16 @@ const JobManage = () => {
   const [ratingScore, setRatingScore] = useState(5);
   const [ratingReview, setRatingReview] = useState('');
   const [ratingSubmitted, setRatingSubmitted] = useState(false);
-  const [waitChosen, setWaitChosen] = useState(false);
+  const [assignedWorker, setAssignedWorker] = useState(null);
+  const [completion, setCompletion] = useState(null);
 
   useEffect(() => {
     setJob(null); setApplicants([]); setOtp(null); setPayment(null);
-    setNoShow(null); setBackups([]); setActiveTab('details'); setLoading(true);
+    setNoShow(null); setBackups([]); setAssignedWorker(null); setCompletion(null); setActiveTab('details'); setLoading(true);
     fetchAll();
     const interval = setInterval(fetchAll, 10000);
     return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId]);
 
   const fetchAll = async () => {
@@ -48,6 +50,15 @@ const JobManage = () => {
       }
 
       if (['assigned', 'in_progress', 'completed'].includes(status)) {
+        // Fetch assigned worker info
+        try {
+          const workerRes = await axios.get(
+            `http://localhost:5000/api/applications/${jobId}/assigned-worker`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          setAssignedWorker(workerRes.data.worker || null);
+        } catch (e) {}
+
         try {
           const otpRes = await axios.get(`http://localhost:5000/api/otp/${jobId}`, {
             headers: { Authorization: `Bearer ${token}` },
@@ -61,9 +72,17 @@ const JobManage = () => {
           });
           setPayment(payRes.data.payment);
         } catch (e) {}
-      }
 
-      if (['assigned', 'in_progress'].includes(status)) {
+        // Fetch entry/exit times for completed jobs
+        if (status === 'completed') {
+          try {
+            const compRes = await axios.get(`http://localhost:5000/api/completion/${jobId}`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            setCompletion(compRes.data.completion);
+          } catch (e) {}
+        }
+
         let noShowData = null;
         try {
           const nsRes = await axios.get(`http://localhost:5000/api/emergency/check/${jobId}`, {
@@ -82,10 +101,19 @@ const JobManage = () => {
           setBackups(currentBackups);
         } catch (e) {}
 
-        if (noShowData?.is_late && !noShowData?.is_waiting && !noShowData?.auto_cancelled && currentBackups.length === 0) {
+        // AUTO-TRIGGER: if worker is late and no backups notified yet, trigger then reload
+        if (noShowData?.is_late && currentBackups.length === 0) {
           try {
-            await axios.post(`http://localhost:5000/api/emergency/trigger/${jobId}`, {}, { headers: { Authorization: `Bearer ${token}` } });
-            const reloadBk = await axios.get(`http://localhost:5000/api/emergency/${jobId}/backups`, { headers: { Authorization: `Bearer ${token}` } });
+            await axios.post(
+              `http://localhost:5000/api/emergency/trigger/${jobId}`,
+              {},
+              { headers: { Authorization: `Bearer ${token}` } }
+            );
+            // Reload from getEmergencyBackups — guaranteed to have worker_id + status fields
+            const reloadBk = await axios.get(
+              `http://localhost:5000/api/emergency/${jobId}/backups`,
+              { headers: { Authorization: `Bearer ${token}` } }
+            );
             setBackups(reloadBk.data.backup_workers || []);
           } catch (e) {}
         }
@@ -192,7 +220,6 @@ const JobManage = () => {
         `http://localhost:5000/api/emergency/${jobId}/wait`,
         {}, { headers: { Authorization: `Bearer ${token}` } }
       );
-      setWaitChosen(true);
       setNoShow(prev => ({
         ...prev,
         is_waiting: true,
@@ -240,22 +267,33 @@ const JobManage = () => {
     }
   };
 
+  const raiseDispute = async () => {
+    const reason = prompt('Briefly describe the issue (e.g. Worker did not arrive, Poor quality work):');
+    if (!reason) return;
+    const description = prompt('Provide more details about the dispute:');
+    try {
+      await axios.post(`http://localhost:5000/api/disputes/${jobId}`,
+        { reason, description: description || reason },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      alert('✅ Dispute raised successfully. Admin has been notified and will review shortly.');
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to raise dispute.');
+    }
+  };
+
   if (loading) return <div style={s.center}>Loading...</div>;
   if (!job) return <div style={s.center}>Job not found. <button onClick={() => navigate(-1)}>Go Back</button></div>;
 
   const status = job.status;
-  const isWorkerAssigned = ['assigned', 'in_progress'].includes(status);
-  const deadlineMs = job?.arrival_deadline ? new Date(job.arrival_deadline).getTime() : null;
-  const deadlineAlreadyPassed = deadlineMs && Date.now() > deadlineMs;
-  const minutesLeft = noShow?.minutes_left ?? (deadlineAlreadyPassed ? 0 : 30);
-  const minutesElapsed = noShow?.minutes_elapsed ?? (deadlineAlreadyPassed ? 30 : 0);
-  const timerPct = Math.max(0, Math.min(100, (minutesLeft / 30) * 100));
-  const isEffectivelyLate = isWorkerAssigned && (noShow?.is_late || (deadlineAlreadyPassed && !noShow));
-  const timerColor = isEffectivelyLate ? '#ef4444' : minutesLeft <= 5 ? '#ef4444' : minutesLeft <= 10 ? '#f59e0b' : '#10b981';
+  const minutesLeft = noShow?.minutes_left ?? 30;
+  const minutesElapsed = noShow?.minutes_elapsed ?? 0;
+  const timerPct = Math.max(0, (minutesLeft / 30) * 100);
+  const timerColor = noShow?.is_late ? '#ef4444' : minutesLeft <= 5 ? '#ef4444' : minutesLeft <= 10 ? '#f59e0b' : '#10b981';
   const workerArrived = otp?.is_used;
   // Arrival deadline: urgent = job posted + 30min, scheduled = scheduled_time + 30min
   const arrivalDeadlineStr = job?.arrival_deadline
-    ? new Date(job.arrival_deadline).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })
+    ? new Date(job.arrival_deadline).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', hour12: true })
     : null;
 
   // Build tabs based on job status
@@ -284,19 +322,19 @@ const JobManage = () => {
       </div>
 
       {/* Timer — only for assigned/in_progress */}
-      {['assigned', 'in_progress'].includes(status) && noShow && !workerArrived && !noShow.is_late && !isEffectivelyLate && (
+      {['assigned', 'in_progress'].includes(status) && noShow && !workerArrived && !noShow.is_late && (
         <div style={s.timerBox}>
           <div style={s.timerRow}>
             <div>
-              <p style={s.timerTitle}>⏱ Waiting for Worker to Arrive</p>
+              <p style={s.timerTitle}>⏱ Worker Arrival Timer</p>
               <p style={s.timerSub}>
                 {job.arrival_deadline
-                  ? job.urgency === 'scheduled'
-                    ? `Must arrive by: ${new Date(job.arrival_deadline).toLocaleString()} (30 min after scheduled time)`
-                    : `Must arrive by: ${new Date(job.arrival_deadline).toLocaleString()} (30 min from selection)`
-                  : 'Worker has 30 minutes to arrive'}
+                  ? `Worker must arrive by: ${new Date(job.arrival_deadline).toLocaleString([], { hour12: true })}`
+                  : job.urgency === 'scheduled' && job.scheduled_time
+                    ? `Scheduled for: ${new Date(job.scheduled_time).toLocaleString([], { hour12: true })}`
+                    : 'Worker has 30 minutes to arrive after selection'}
               </p>
-              <p style={s.timerElapsed}>Worker selected {minutesElapsed} min ago — {minutesLeft} min remaining to arrive</p>
+              <p style={s.timerElapsed}>{minutesElapsed} of 30 minutes elapsed</p>
               {arrivalDeadlineStr && (
                 <p style={{ fontSize: '13px', color: '#4f46e5', fontWeight: '600', margin: '4px 0 0 0' }}>
                   📅 Deadline: {arrivalDeadlineStr}
@@ -320,7 +358,7 @@ const JobManage = () => {
       )}
 
       {/* Worker Late — 3 Options Panel */}
-      {(noShow?.is_late || isEffectivelyLate) && !workerArrived && !noShow?.auto_cancelled && (
+      {noShow?.is_late && !workerArrived && !noShow?.auto_cancelled && (
         <div style={{
           margin: '16px 0', borderRadius: '16px', overflow: 'hidden',
           border: '2px solid #fca5a5', boxShadow: '0 4px 24px rgba(239,68,68,0.15)',
@@ -337,8 +375,8 @@ const JobManage = () => {
               </p>
               <p style={{ margin: '2px 0 0 0', color: '#fecaca', fontSize: '13px' }}>
                 {job.urgency === 'urgent'
-                  ? `Worker was due 30 min after selection (by ${arrivalDeadlineStr})`
-                  : `Worker was due 30 min after scheduled time (by ${arrivalDeadlineStr})`}
+                  ? `Urgent job — worker was due 30 min after posting (${arrivalDeadlineStr})`
+                  : `Scheduled job — worker was due by ${arrivalDeadlineStr}`}
                 {' '}· {minutesElapsed} minutes overdue
               </p>
             </div>
@@ -359,7 +397,7 @@ const JobManage = () => {
                     Waiting {noShow.wait_mins_left ?? 10} more minute{noShow.wait_mins_left !== 1 ? 's' : ''}...
                   </p>
                   <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#64748b' }}>
-                    If the worker does not arrive by {noShow.wait_until ? new Date(noShow.wait_until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}, the job will be <strong>cancelled automatically</strong>.
+                    If the worker does not arrive by {noShow.wait_until ? new Date(noShow.wait_until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }) : '—'}, the job will be <strong>cancelled automatically</strong>.
                   </p>
                 </div>
               </div>
@@ -594,7 +632,7 @@ const JobManage = () => {
           <button
             key={t}
             style={activeTab === t ? s.tabActive : s.tab}
-            onClick={() => { setActiveTab(t); if (t === 'applicants') fetchAll(); }}
+            onClick={() => setActiveTab(t)}
           >
             {t === 'details' && '📋 Details'}
             {t === 'applicants' && `👥 Applicants (${applicants.length})`}
@@ -633,7 +671,7 @@ const JobManage = () => {
             {job.scheduled_time && (
               <div style={s.scheduledBox}>
                 <p style={s.scheduledLabel}>📅 Scheduled Arrival Time</p>
-                <p style={s.scheduledVal}>{new Date(job.scheduled_time).toLocaleString()}</p>
+                <p style={s.scheduledVal}>{new Date(job.scheduled_time).toLocaleString([], { hour12: true })}</p>
               </div>
             )}
 
@@ -657,13 +695,73 @@ const JobManage = () => {
               </div>
             )}
 
+            {['assigned', 'in_progress', 'completed'].includes(status) && assignedWorker && (
+              <div style={{
+                margin: '20px 0 0 0', padding: '20px', borderRadius: '14px',
+                background: 'linear-gradient(135deg, #f0f4ff 0%, #faf5ff 100%)',
+                border: '1.5px solid #c7d2fe',
+              }}>
+                <p style={{ margin: '0 0 14px 0', fontWeight: '700', fontSize: '15px', color: '#3730a3' }}>
+                  👷 Assigned Worker
+                </p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+                  <div style={{
+                    width: '56px', height: '56px', borderRadius: '50%',
+                    background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+                    color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: '24px', fontWeight: '700', flexShrink: 0,
+                  }}>
+                    {assignedWorker.full_name?.charAt(0).toUpperCase()}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <p style={{ margin: '0 0 4px 0', fontWeight: '700', fontSize: '17px', color: '#1a1a2e' }}>
+                      {assignedWorker.full_name}
+                    </p>
+                    <p style={{ margin: '0 0 4px 0', fontSize: '13px', color: '#64748b' }}>
+                      📞 {assignedWorker.phone}
+                    </p>
+                    <p style={{ margin: '0 0 6px 0', fontSize: '13px', color: '#f59e0b' }}>
+                      ⭐ {parseFloat(assignedWorker.rating || 0).toFixed(1)} ({assignedWorker.total_ratings || 0} reviews)
+                    </p>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {(assignedWorker.skills || []).slice(0, 4).map(sk => (
+                        <span key={sk} style={{
+                          fontSize: '11px', padding: '3px 10px', borderRadius: '999px',
+                          background: '#ede9fe', color: '#4f46e5', fontWeight: '600',
+                        }}>{sk}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <button style={{
+                      padding: '8px 16px', borderRadius: '8px', border: 'none', cursor: 'pointer',
+                      background: '#4f46e5', color: '#fff', fontWeight: '600', fontSize: '13px',
+                    }} onClick={() => navigate(`/worker/${assignedWorker.id}`)}>
+                      👤 Profile
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {['assigned', 'in_progress'].includes(status) && (
               <div style={s.actionRow}>
                 <button style={s.btnPrimary} onClick={() => navigate(`/track/${jobId}`)}>
                   📍 Live Track Worker
                 </button>
-                <button style={s.btnSecondary} onClick={() => navigate(`/chat/${jobId}`)}>
-                  💬 Chat with Worker
+              </div>
+            )}
+
+            {/* Raise Dispute */}
+            {['assigned', 'in_progress', 'completed'].includes(status) && (
+              <div style={{ marginTop: '12px' }}>
+                <button
+                  onClick={raiseDispute}
+                  style={{ background: 'none', border: '1px solid #ef4444', color: '#ef4444',
+                    padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px',
+                    fontWeight: '600' }}
+                >
+                  ⚠️ Raise a Dispute
                 </button>
               </div>
             )}
@@ -704,7 +802,8 @@ const JobManage = () => {
                       <button style={s.btnViewProfile} onClick={() => navigate(`/worker/${a.worker_id}`)}>
                         View Profile
                       </button>
-                      <a href={`tel:${a.phone}`} style={s.btnCall}>📞 Call</a>
+
+
                     </div>
                   </div>
                 ))}
@@ -731,7 +830,6 @@ const JobManage = () => {
           <div style={s.card}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <h3 style={{ ...s.tabTitle, margin: 0 }}>OTP Verification</h3>
-              <button style={s.btnRefreshOtp} onClick={refreshOtp}>🔄 Refresh Status</button>
             </div>
 
             {/* Scheduled time reminder */}
@@ -739,7 +837,7 @@ const JobManage = () => {
               <div style={s.scheduledReminder}>
                 <p style={{ fontWeight: 'bold', margin: '0 0 4px 0' }}>📅 Scheduled Arrival Time</p>
                 <p style={{ fontSize: '18px', fontWeight: 'bold', margin: 0 }}>
-                  {new Date(job.scheduled_time).toLocaleString()}
+                  {new Date(job.scheduled_time).toLocaleString([], { hour12: true })}
                 </p>
               </div>
             )}
@@ -759,12 +857,36 @@ const JobManage = () => {
             ) : (
               <div style={s.otpMissing}>
                 <p style={{ color: '#92400e', fontWeight: 'bold', margin: '0 0 8px 0' }}>⚠️ No OTP generated yet</p>
-                <p style={{ color: '#666', fontSize: '14px', margin: '0 0 12px 0' }}>OTP is created when you select a worker. Click Refresh Status to check.</p>
-                <button style={s.btnRefreshOtp} onClick={refreshOtp}>🔄 Refresh Status</button>
-              </div>
+                <p style={{ color: '#666', fontSize: '14px', margin: 0 }}>OTP is created when you select a worker.</p>
+                </div>
             )}
 
-
+            {/* Auto-assignment 3 options */}
+            {!workerArrived && ['assigned', 'in_progress'].includes(status) && (
+              <div style={s.autoAssignBox}>
+                <p style={s.autoAssignTitle}>⏳ Waiting for worker to arrive? You have 3 options:</p>
+                <div style={s.optionItemSimple}>
+                  <span style={s.optionNum}>1</span>
+                  <div>
+                    <p style={s.optionText}><strong>Wait</strong> — Worker is on the way. OTP will verify when they arrive.</p>
+                  </div>
+                </div>
+                <div style={s.optionItemSimple}>
+                  <span style={s.optionNum}>2</span>
+                  <div>
+                    <p style={s.optionText}><strong>Track Worker</strong> — See their live location on the map.</p>
+                    <button style={s.btnOptionAction} onClick={() => navigate(`/track/${jobId}`)}>📍 Track Worker</button>
+                  </div>
+                </div>
+                <div style={s.optionItemSimple}>
+                  <span style={s.optionNum}>3</span>
+                  <div>
+                    <p style={s.optionText}><strong>Emergency Backup</strong> — If worker is late, get a replacement.</p>
+                    <button style={{ ...s.btnOptionAction, backgroundColor: '#ef4444' }} onClick={triggerEmergency}>🚨 Get Backup Worker</button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -815,6 +937,35 @@ const JobManage = () => {
               ))}
             </div>
 
+            {/* Job Timeline */}
+            {completion && (
+              <div style={{ margin: '16px 0', padding: '14px 18px', borderRadius: '12px', background: '#f0fdf4', border: '1px solid #bbf7d0' }}>
+                <p style={{ margin: '0 0 10px 0', fontWeight: '700', fontSize: '14px', color: '#15803d' }}>⏱ Job Timeline</p>
+                <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
+                  <div>
+                    <p style={{ margin: '0 0 2px 0', fontSize: '11px', color: '#6b7280', textTransform: 'uppercase', fontWeight: '600' }}>Entry Time</p>
+                    <p style={{ margin: 0, fontSize: '15px', fontWeight: '700', color: '#15803d' }}>
+                      🟢 {completion.entry_time ? new Date(completion.entry_time).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) : '—'}
+                    </p>
+                  </div>
+                  <div>
+                    <p style={{ margin: '0 0 2px 0', fontSize: '11px', color: '#6b7280', textTransform: 'uppercase', fontWeight: '600' }}>Exit Time</p>
+                    <p style={{ margin: 0, fontSize: '15px', fontWeight: '700', color: '#dc2626' }}>
+                      🔴 {completion.exit_time ? new Date(completion.exit_time).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) : '—'}
+                    </p>
+                  </div>
+                  {completion.entry_time && completion.exit_time && (
+                    <div>
+                      <p style={{ margin: '0 0 2px 0', fontSize: '11px', color: '#6b7280', textTransform: 'uppercase', fontWeight: '600' }}>Duration</p>
+                      <p style={{ margin: 0, fontSize: '15px', fontWeight: '700', color: '#4f46e5' }}>
+                        ⏳ {Math.round((new Date(completion.exit_time) - new Date(completion.entry_time)) / 60000)} min
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {status === 'completed' && !payment?.payment_sent && (
               <div style={s.payBox}>
                 <p style={s.payInfo}>Job is complete! Pay your worker Rs.{job.rate}</p>
@@ -830,22 +981,28 @@ const JobManage = () => {
               </div>
             )}
 
-            {payment?.payment_received && (
+            {/* Rating — available only after payment confirmed */}
+            {status === 'completed' && payment?.payment_received && (
               <div style={s.ratingBox}>
                 {ratingSubmitted ? (
                   <div style={{ textAlign: 'center', padding: '20px' }}>
                     <p style={{ fontSize: '40px', margin: '0 0 10px 0' }}>🎉</p>
-                    <h4 style={{ color: '#065f46', fontWeight: 'bold', margin: '0 0 6px 0' }}>Rating Submitted!</h4>
-                    <p style={{ color: '#666', fontSize: '14px', margin: 0 }}>
-                      {'★'.repeat(ratingScore)}{'☆'.repeat(5 - ratingScore)} {ratingScore}/5 stars
+                    <h4 style={{ color: '#065f46', fontWeight: 'bold', margin: '0 0 6px 0' }}>
+                      Thank you for your review!
+                    </h4>
+                    <p style={{ color: '#f59e0b', fontSize: '20px', margin: '0 0 4px 0' }}>
+                      {'★'.repeat(ratingScore)}{'☆'.repeat(5 - ratingScore)}
                     </p>
-                    <p style={{ color: '#666', fontSize: '13px', margin: '8px 0 0 0' }}>
-                      Job cycle complete. Thank you!
+                    <p style={{ color: '#666', fontSize: '13px', margin: 0 }}>
+                      {ratingScore}/5 stars — Review posted to worker's profile
                     </p>
                   </div>
                 ) : (
                   <>
                     <h4 style={s.ratingTitle}>⭐ Rate Your Worker</h4>
+                    <p style={{ color: '#64748b', fontSize: '13px', margin: '0 0 12px 0' }}>
+                      Your review will appear on the worker's public profile.
+                    </p>
                     <div style={s.starsRow}>
                       {[1, 2, 3, 4, 5].map(star => (
                         <button key={star} style={{ ...s.star, color: star <= ratingScore ? '#f59e0b' : '#ddd' }}
@@ -860,7 +1017,9 @@ const JobManage = () => {
                       onChange={(e) => setRatingReview(e.target.value)}
                       rows={3}
                     />
-                    <button style={s.btnPrimary} onClick={rateWorker}>Submit Rating</button>
+                    <button style={s.btnPrimary} onClick={rateWorker}>
+                      ⭐ Submit Review
+                    </button>
                   </>
                 )}
               </div>
@@ -958,7 +1117,6 @@ const s = {
   appActions: { display: 'flex', flexDirection: 'column', gap: '8px', minWidth: '140px' },
   btnSelect: { backgroundColor: '#10b981', color: '#fff', border: 'none', padding: '10px 16px', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold' },
   btnViewProfile: { backgroundColor: '#ede9fe', color: '#4f46e5', border: 'none', padding: '10px 16px', borderRadius: '8px', cursor: 'pointer', fontSize: '14px' },
-  btnCall: { backgroundColor: '#f3f4f6', color: '#333', padding: '10px 16px', borderRadius: '8px', fontSize: '14px', textDecoration: 'none', textAlign: 'center' },
   editNote: { color: '#666', marginBottom: '16px' },
   otpBox: { textAlign: 'center', padding: '20px' },
   otpLabel: { fontSize: '16px', color: '#666', marginBottom: '16px' },
@@ -975,7 +1133,6 @@ const s = {
   payInfo: { fontSize: '15px', color: '#333', marginBottom: '12px' },
   btnPay: { backgroundColor: '#10b981', color: '#fff', border: 'none', padding: '14px 28px', borderRadius: '8px', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold' },
   ratingBox: { marginTop: '20px', padding: '20px', backgroundColor: '#fffbeb', borderRadius: '12px' },
-  btnRefreshOtp: { backgroundColor: '#4f46e5', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' },
   scheduledReminder: { backgroundColor: '#ede9fe', padding: '16px', borderRadius: '10px', marginBottom: '20px', border: '2px solid #4f46e5' },
   otpMissing: { backgroundColor: '#fef3c7', padding: '20px', borderRadius: '10px', marginBottom: '20px', textAlign: 'center' },
   autoAssignBox: { backgroundColor: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '20px', marginTop: '24px' },

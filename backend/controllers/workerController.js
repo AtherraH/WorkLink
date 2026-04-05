@@ -38,17 +38,42 @@ const updateProfile = async (req, res) => {
   const userId = req.user.id;
   const { bio, skills, hourly_rate, phone, full_name } = req.body;
   try {
-    await pool.query(
-      `UPDATE worker_profiles
-       SET skills = COALESCE($1, skills)
-       WHERE user_id = $2`,
-      [skills ? JSON.stringify(skills) : null, userId]
-    );
+    // skills must be passed as a native PostgreSQL TEXT[] array, not JSON string
+    const skillsArray = Array.isArray(skills) ? skills : [];
+
+    // Try updating with bio and hourly_rate (requires migration columns to exist)
+    // Fall back to skills-only update if columns are missing
+    try {
+      await pool.query(
+        `UPDATE worker_profiles
+         SET skills      = $1,
+             bio         = $2,
+             hourly_rate = $3
+         WHERE user_id = $4`,
+        [
+          skillsArray,
+          bio !== undefined && bio !== null ? bio : '',
+          hourly_rate !== undefined && hourly_rate !== '' && hourly_rate !== null
+            ? parseFloat(hourly_rate)
+            : null,
+          userId,
+        ]
+      );
+    } catch (colErr) {
+      // bio/hourly_rate columns may not exist yet — fall back to skills only
+      console.warn('bio/hourly_rate columns missing, updating skills only:', colErr.message);
+      await pool.query(
+        `UPDATE worker_profiles SET skills = $1 WHERE user_id = $2`,
+        [skillsArray, userId]
+      );
+    }
+
+    // Update users table: full_name, phone
     if (phone || full_name) {
       await pool.query(
         `UPDATE users SET
-           phone = COALESCE($1, phone),
-           full_name = COALESCE($2, full_name)
+           phone      = COALESCE($1, phone),
+           full_name  = COALESCE($2, full_name)
          WHERE id = $3`,
         [phone || null, full_name || null, userId]
       );
@@ -56,7 +81,7 @@ const updateProfile = async (req, res) => {
     res.status(200).json({ message: 'Profile updated successfully.' });
   } catch (err) {
     console.error('Update profile error:', err.message);
-    res.status(500).json({ message: 'Server error.' });
+    res.status(500).json({ message: 'Server error: ' + err.message });
   }
 };
 
@@ -137,19 +162,10 @@ const updateLocation = async (req, res) => {
   const userId = req.user.id;
   const { latitude, longitude } = req.body;
   try {
-    // Update worker_profiles (for proximity search)
     await pool.query(
       `UPDATE worker_profiles SET latitude = $1, longitude = $2 WHERE user_id = $3`,
       [latitude, longitude, userId]
     );
-    // Also update assigned_workers for accurate per-job tracking
-    await pool.query(
-      `UPDATE assigned_workers SET latitude = $1, longitude = $2, location_updated_at = NOW()
-       WHERE worker_id = $3 AND job_id IN (
-         SELECT id FROM jobs WHERE status IN ('assigned', 'in_progress')
-       )`,
-      [latitude, longitude, userId]
-    ).catch(() => {}); // ignore if columns don't exist yet
     res.status(200).json({ message: 'Location updated.' });
   } catch (err) {
     console.error('Update location error:', err.message);
@@ -161,29 +177,13 @@ const updateLocation = async (req, res) => {
 const getWorkerLocation = async (req, res) => {
   const { jobId } = req.params;
   try {
-    // Try assigned_workers first (per-job accurate location)
-    let result = await pool.query(
-      `SELECT aw.latitude, aw.longitude, u.full_name AS worker_name, aw.worker_id, wp.is_online,
-              aw.location_updated_at AS updated_at
-       FROM assigned_workers aw
-       JOIN users u ON u.id = aw.worker_id
-       LEFT JOIN worker_profiles wp ON wp.user_id = aw.worker_id
-       WHERE aw.job_id = $1 AND aw.latitude IS NOT NULL`,
+    const result = await pool.query(
+      `SELECT wp.latitude, wp.longitude
+       FROM worker_profiles wp
+       JOIN assigned_workers aw ON aw.worker_id = wp.user_id
+       WHERE aw.job_id = $1`,
       [jobId]
-    ).catch(() => ({ rows: [] }));
-
-    // Fallback: use worker_profiles if assigned_workers has no location
-    if (result.rows.length === 0 || !result.rows[0].latitude) {
-      result = await pool.query(
-        `SELECT wp.latitude, wp.longitude, u.full_name AS worker_name, aw.worker_id, wp.is_online
-         FROM worker_profiles wp
-         JOIN assigned_workers aw ON aw.worker_id = wp.user_id
-         JOIN users u ON u.id = wp.user_id
-         WHERE aw.job_id = $1 AND wp.latitude IS NOT NULL`,
-        [jobId]
-      ).catch(() => ({ rows: [] }));
-    }
-
+    );
     if (result.rows.length === 0 || !result.rows[0].latitude) {
       return res.status(200).json({ location: null });
     }
@@ -200,7 +200,7 @@ const getAssignedJobs = async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT j.*, u.full_name AS customer_name, u.phone AS customer_phone,
-              aw.assigned_at, aw.entry_time
+              aw.assigned_at, aw.entry_time, aw.exit_time, aw.completion_photo_url
        FROM jobs j
        JOIN assigned_workers aw ON aw.job_id = j.id
        JOIN users u ON u.id = j.customer_id

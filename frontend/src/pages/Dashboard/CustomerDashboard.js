@@ -1,12 +1,23 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { useAuth } from '../../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
+
+const formatTime = (ts) => {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleString([], {
+    month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: true,
+  });
+};
 
 const CustomerDashboard = () => {
   const { user, token, logout } = useAuth();
   const navigate = useNavigate();
   const [jobs, setJobs] = useState([]);
+  const [myDisputes, setMyDisputes] = useState([]);
+  const [jobTimelines, setJobTimelines] = useState({});
+  const [sysNotifs, setSysNotifs] = useState(() => { try { return JSON.parse(localStorage.getItem('customer_notifs') || '[]'); } catch(e) { return []; } });
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('active');
 
@@ -14,7 +25,39 @@ const CustomerDashboard = () => {
     if (!user) return;
     if (user.role !== 'customer') { navigate('/login'); return; }
     fetchMyJobs();
+    axios.get('http://localhost:5000/api/disputes/my-disputes',
+      { headers: { Authorization: `Bearer ${token}` } }
+    ).then(r => setMyDisputes(r.data.disputes || [])).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Listen for admin system notifications (ban/warn/unban/resolve)
+  useEffect(() => {
+    if (!user) return;
+    let socket;
+    import('socket.io-client').then(({ io }) => {
+      socket = io('http://localhost:5000');
+      socket.emit('join_user_room', user.id);
+      socket.on('system_notification', (notif) => {
+        // If banned, show alert then force logout immediately
+        if (notif.type === 'ban') {
+          alert(`🚫 Your account has been banned.\n\nReason: ${notif.message.replace(/^.*Reason: /, '')}\n\nYou will be logged out now.`);
+          logout();
+          navigate('/login');
+          return;
+        }
+        setSysNotifs(prev => {
+          const key = `${notif.type}_${notif.message}`;
+          if (prev.some(n => `${n.type}_${n.message}` === key)) return prev;
+          const updated = [notif, ...prev].slice(0, 10);
+          localStorage.setItem('customer_notifs', JSON.stringify(updated));
+          return updated;
+        });
+      });
+    }).catch(() => {});
+    return () => { if (socket) socket.disconnect(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   const fetchMyJobs = async () => {
     try {
@@ -23,6 +66,19 @@ const CustomerDashboard = () => {
         { headers: { Authorization: `Bearer ${token}` } }
       );
       setJobs(res.data.jobs);
+      // Fetch entry/exit times for completed jobs
+      const completed = res.data.jobs.filter(j => j.status === 'completed');
+      const timelines = {};
+      await Promise.all(completed.map(async (j) => {
+        try {
+          const tr = await axios.get(
+            `http://localhost:5000/api/completion/${j.id}`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          if (tr.data.completion) timelines[j.id] = tr.data.completion;
+        } catch (e) {}
+      }));
+      setJobTimelines(timelines);
     } catch (err) {
       console.error('Failed to fetch jobs:', err.message);
     } finally {
@@ -30,7 +86,7 @@ const CustomerDashboard = () => {
     }
   };
 
-  const handleLogout = () => { logout(); navigate('/'); };
+  const handleLogout = () => { localStorage.removeItem('customer_notifs'); logout(); navigate('/login'); };
 
   const activeJobs = jobs.filter((j) => ['assigned', 'in_progress'].includes(j.status));
   const openJobs = jobs.filter((j) => j.status === 'open');
@@ -73,37 +129,17 @@ const CustomerDashboard = () => {
           <p style={styles.jobMeta}>📍 {job.location}</p>
           <p style={styles.jobMeta}>💰 Rs.{job.rate}</p>
           <p style={styles.jobMeta}>🗓 {new Date(job.created_at).toLocaleDateString()}</p>
-          {/* Arrival deadline — only for assigned jobs with worker not yet arrived */}
-          {job.status === 'assigned' && job.arrival_deadline && (() => {
-            const deadline = new Date(job.arrival_deadline);
-            const now = new Date();
-            const minsLeft = Math.floor((deadline - now) / 60000);
-            const isLate = minsLeft < 0;
-            const isSoon = minsLeft <= 10 && !isLate;
-            const bgColor = isLate ? '#fee2e2' : isSoon ? '#fef3c7' : '#ede9fe';
-            const borderColor = isLate ? '#fca5a5' : isSoon ? '#fcd34d' : '#c4b5fd';
-            const textColor = isLate ? '#991b1b' : isSoon ? '#92400e' : '#3730a3';
-            const numColor = isLate ? '#ef4444' : isSoon ? '#f59e0b' : '#4f46e5';
-            return (
-              <div onClick={e => e.stopPropagation()} style={{
-                margin: '10px 0 4px 0', padding: '10px 12px', borderRadius: '8px',
-                backgroundColor: bgColor, border: `1px solid ${borderColor}`,
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              }}>
-                <div>
-                  <p style={{ fontSize: '12px', fontWeight: 'bold', margin: 0, color: textColor }}>
-                    {isLate ? '🚨 WORKER OVERDUE' : isSoon ? '⚠️ ARRIVING SOON' : '⏱ Worker must arrive by'}
-                  </p>
-                  <p style={{ fontSize: '11px', margin: '2px 0 0 0', color: '#555' }}>
-                    {deadline.toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })}
-                  </p>
-                </div>
-                <span style={{ fontSize: '18px', fontWeight: 'bold', color: numColor }}>
-                  {isLate ? `+${Math.abs(minsLeft)}m late` : `${minsLeft}m`}
-                </span>
-              </div>
-            );
-          })()}
+          {job.status === 'completed' && jobTimelines[job.id] && (
+            <div style={{ margin: '10px 0', padding: '10px', background: '#f0fdf4', borderRadius: '8px', border: '1px solid #bbf7d0' }}>
+              <p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#15803d', fontWeight: '700' }}>⏱ Job Timeline</p>
+              <p style={{ margin: '0 0 2px 0', fontSize: '12px', color: '#374151' }}>
+                🟢 Entry: <strong>{formatTime(jobTimelines[job.id].entry_time)}</strong>
+              </p>
+              <p style={{ margin: 0, fontSize: '12px', color: '#374151' }}>
+                🔴 Exit: <strong>{formatTime(jobTimelines[job.id].exit_time)}</strong>
+              </p>
+            </div>
+          )}
           <div style={styles.jobCardFooter}>
             <button style={styles.btnManage}>Manage Job →</button>
           </div>
@@ -150,6 +186,25 @@ const CustomerDashboard = () => {
         </div>
       </div>
 
+      {/* System Notifications */}
+      {sysNotifs.length > 0 && (
+        <div style={{ padding: '12px 20px', background: '#fff', borderBottom: '1px solid #eee' }}>
+          {sysNotifs.map((n, i) => (
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '10px 14px', marginBottom: '6px', borderRadius: '8px',
+              background: n.type === 'ban' ? '#fee2e2' : n.type === 'warn' ? '#fef3c7' : '#d1fae5',
+              border: `1px solid ${n.type === 'ban' ? '#fca5a5' : n.type === 'warn' ? '#fcd34d' : '#6ee7b7'}` }}>
+              <p style={{ margin: 0, fontSize: '13px', fontWeight: '600',
+                color: n.type === 'ban' ? '#991b1b' : n.type === 'warn' ? '#92400e' : '#065f46' }}>
+                {n.type === 'ban' ? '🚫' : n.type === 'warn' ? '⚠️' : '✅'} {n.message}
+              </p>
+              <button onClick={() => { const updated = sysNotifs.filter((_,j)=>j!==i); setSysNotifs(updated); localStorage.setItem('customer_notifs', JSON.stringify(updated)); }}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: '16px' }}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Stats */}
       <div style={styles.statsBar}>
         <div style={styles.statCard}>
@@ -177,6 +232,7 @@ const CustomerDashboard = () => {
           { key: 'open', label: `🟡 Open (${openJobs.length})` },
           { key: 'past', label: `✅ Past (${pastJobs.length})` },
           { key: 'all', label: `📋 All (${jobs.length})` },
+          { key: 'disputes', label: `⚠️ Disputes (${myDisputes.length})` },
         ].map((t) => (
           <button
             key={t.key}
@@ -204,6 +260,8 @@ const CustomerDashboard = () => {
                 btnText="Post a Job" btnAction={() => navigate('/post-job')} />
             : <div style={styles.grid}>{openJobs.map(renderJobCard)}</div>
         )}
+        {activeTab === 'disputes' && <DisputesTab disputes={myDisputes} token={token} currentUserId={user.id} />}
+
         {activeTab === 'past' && (
           pastJobs.length === 0
             ? <EmptyState icon="✅" title="No Past Jobs"
@@ -304,6 +362,162 @@ const styles = {
   emptyIcon: { fontSize: '48px', margin: '0 0 12px 0' },
   emptyTitle: { fontSize: '22px', fontWeight: 'bold', color: '#1a1a2e', margin: '0 0 8px 0' },
   emptyText: { color: '#666', marginBottom: '20px' },
+};
+
+
+const DisputesTab = ({ disputes, token, currentUserId }) => {
+  const [openChatId, setOpenChatId] = useState(null);
+  return (
+    <div>
+      <h3 style={{ fontSize: '18px', fontWeight: '700', color: '#1a1a2e', marginBottom: '16px' }}>
+        ⚠️ My Disputes ({disputes.length})
+      </h3>
+      {disputes.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '40px', color: '#9ca3af' }}>
+          <p style={{ fontSize: '40px', margin: '0 0 12px 0' }}>✅</p>
+          <p style={{ fontWeight: '700', fontSize: '16px' }}>No disputes filed</p>
+          <p style={{ fontSize: '14px' }}>You have not raised any disputes yet.</p>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {disputes.map((d) => (
+            <div key={d.id} style={{
+              background: '#fff', borderRadius: '12px', padding: '16px 20px',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+              borderLeft: `4px solid ${d.status === 'open' ? '#ef4444' : '#10b981'}`,
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <span style={{ fontSize: '11px', fontWeight: '700', padding: '3px 10px', borderRadius: '999px', background: d.status === 'open' ? '#fee2e2' : '#d1fae5', color: d.status === 'open' ? '#991b1b' : '#065f46' }}>
+                  {d.status?.toUpperCase()}
+                </span>
+                <span style={{ fontSize: '12px', color: '#9ca3af' }}>
+                  {new Date(d.created_at).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}
+                </span>
+              </div>
+              <p style={{ margin: '0 0 4px 0', fontWeight: '700', fontSize: '15px', color: '#1a1a2e' }}>{d.reason}</p>
+              <p style={{ margin: '0 0 8px 0', fontSize: '13px', color: '#64748b' }}>{d.description}</p>
+              <p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#9ca3af' }}>📋 Job: {d.job_title || '—'}</p>
+              <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: '#9ca3af' }}>
+                Reported: {d.reported_name} ({d.reported_role})
+              </p>
+              {d.resolution && (
+                <div style={{ marginBottom: '12px', padding: '10px 14px', background: '#f0fdf4', borderRadius: '8px', border: '1px solid #bbf7d0' }}>
+                  <p style={{ margin: 0, fontSize: '13px', color: '#065f46', fontWeight: '600' }}>✅ Resolution: {d.resolution}</p>
+                </div>
+              )}
+              <button
+                style={{ backgroundColor: openChatId === d.id ? '#1d4ed8' : '#4f46e5', color: '#fff', border: 'none', padding: '8px 18px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '6px' }}
+                onClick={() => setOpenChatId(openChatId === d.id ? null : d.id)}
+              >
+                💬 {openChatId === d.id ? 'Hide Admin Chat' : 'Chat with Admin'}
+              </button>
+              {openChatId === d.id && (
+                <DisputeChatPanel disputeId={d.id} token={token} currentUserId={currentUserId} />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const DisputeChatPanel = ({ disputeId, token, currentUserId }) => {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
+  const bottomRef = useRef(null);
+  const socketRef = useRef(null);
+
+  useEffect(() => {
+    fetchMessages();
+    import('socket.io-client').then(({ io }) => {
+      socketRef.current = io('http://localhost:5000');
+      socketRef.current.emit('join_dispute_room', disputeId);
+      socketRef.current.on('dispute_message', (msg) => {
+        setMessages((prev) => {
+          if (prev.find((m) => m.id === msg.id)) return prev;
+          return [...prev, msg];
+        });
+        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+      });
+    }).catch(() => {});
+    return () => { if (socketRef.current) socketRef.current.disconnect(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [disputeId]);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  const fetchMessages = async () => {
+    try {
+      const res = await axios.get(`http://localhost:5000/api/dispute-chat/${disputeId}`, { headers: { Authorization: `Bearer ${token}` } });
+      setMessages(res.data.messages || []);
+    } catch(e) {}
+  };
+
+  const sendMessage = async () => {
+    if (!input.trim() || sending) return;
+    setSending(true);
+    try {
+      await axios.post(`http://localhost:5000/api/dispute-chat/${disputeId}`, { message: input.trim() }, { headers: { Authorization: `Bearer ${token}` } });
+      setInput('');
+    } catch(e) { alert('Failed to send message.'); }
+    finally { setSending(false); }
+  };
+
+  const handleKey = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } };
+
+  return (
+    <div style={{ marginTop: '14px', border: '1.5px solid #e5e7eb', borderRadius: '12px', overflow: 'hidden', background: '#f8faff' }}>
+      <div style={{ padding: '10px 14px', background: 'linear-gradient(135deg,#4f46e5,#7c3aed)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span style={{ fontSize: '16px' }}>🛡️</span>
+        <p style={{ margin: 0, color: '#fff', fontWeight: '700', fontSize: '13px' }}>Admin Support Chat</p>
+        <span style={{ marginLeft: 'auto', fontSize: '11px', color: '#c7d2fe' }}>Visible to admin &amp; both parties</span>
+      </div>
+      <div style={{ maxHeight: '260px', overflowY: 'auto', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {messages.length === 0 && (
+          <p style={{ textAlign: 'center', color: '#9ca3af', fontStyle: 'italic', fontSize: '13px', margin: '20px 0' }}>
+            No messages yet. Send a message to reach admin support.
+          </p>
+        )}
+        {messages.map((msg) => {
+          const isMe = msg.sender_id === currentUserId;
+          const isAdmin = msg.sender_role === 'admin';
+          return (
+            <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start' }}>
+              {!isMe && (
+                <span style={{ fontSize: '10px', color: '#9ca3af', marginBottom: '2px', marginLeft: '4px' }}>
+                  {isAdmin ? '🛡️ Admin' : msg.sender_name}
+                </span>
+              )}
+              <div style={{ padding: '8px 12px', borderRadius: isMe ? '14px 14px 4px 14px' : '14px 14px 14px 4px', maxWidth: '75%', background: isMe ? 'linear-gradient(135deg,#4f46e5,#7c3aed)' : isAdmin ? 'linear-gradient(135deg,#dc2626,#b91c1c)' : '#e5e7eb', color: isMe || isAdmin ? '#fff' : '#1a1a2e' }}>
+                <p style={{ margin: 0, fontSize: '13px', lineHeight: '1.5' }}>{msg.message}</p>
+                <p style={{ margin: '3px 0 0 0', fontSize: '10px', opacity: 0.75, textAlign: 'right' }}>
+                  {new Date(msg.sent_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}
+                </p>
+              </div>
+            </div>
+          );
+        })}
+        <div ref={bottomRef} />
+      </div>
+      <div style={{ display: 'flex', gap: '8px', padding: '10px 12px', borderTop: '1px solid #e5e7eb', background: '#fff' }}>
+        <input
+          style={{ flex: 1, padding: '8px 12px', borderRadius: '8px', border: '1.5px solid #e5e7eb', fontSize: '13px', outline: 'none' }}
+          placeholder="Type your message to admin..."
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyPress={handleKey}
+          disabled={sending}
+        />
+        <button
+          style={{ backgroundColor: sending ? '#a5b4fc' : '#4f46e5', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '8px', cursor: sending ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: '600' }}
+          onClick={sendMessage}
+          disabled={sending}
+        >Send</button>
+      </div>
+    </div>
+  );
 };
 
 export default CustomerDashboard;

@@ -138,9 +138,6 @@ const JobSuggestions = () => {
                   >
                     View Profile
                   </button>
-                  <a href={`tel:${worker.phone}`} style={s.btnCall}>
-                    📞 Call
-                  </a>
                   {jobId && (
                     <button
                       style={s.btnSelect}
@@ -194,7 +191,7 @@ const s = {
   bio: { color: '#666', fontSize: '13px', margin: '0 0 12px 0', lineHeight: '1.5' },
   actions: { display: 'flex', gap: '10px', flexWrap: 'wrap' },
   btnView: { backgroundColor: '#4f46e5', color: '#fff', border: 'none', padding: '10px 18px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' },
-  btnCall: { backgroundColor: '#10b981', color: '#fff', padding: '10px 18px', borderRadius: '8px', textDecoration: 'none', fontSize: '13px', fontWeight: 'bold' },
+
   btnSelect: { backgroundColor: '#f59e0b', color: '#fff', border: 'none', padding: '10px 18px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' },
 };
 

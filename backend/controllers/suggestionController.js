@@ -34,23 +34,23 @@ const suggestWorkers = async (req, res) => {
     );
 
     const scored = workers.rows.map((worker) => {
-      let score = 0;
       let skill_matched = false;
 
+      // ── TIER 1: Skill Match (hard priority — always separates matched from unmatched) ──
       if (worker.skills && worker.skills.includes(job.labor_type)) {
-        score += 40;
         skill_matched = true;
       }
 
-      if (worker.rating) {
-        score += (parseFloat(worker.rating) / 5) * 30;
-      }
+      // ── TIER 2: Rating (0–50 points) ──
+      const ratingScore = worker.rating
+        ? (parseFloat(worker.rating) / 5) * 50
+        : 0;
 
-      if (worker.is_online) score += 20;
+      // ── TIER 3: Availability / Online (0–30 points) ──
+      const availabilityScore = worker.is_online ? 30 : 0;
 
-      const completedJobs = parseInt(worker.completed_jobs) || 0;
-      score += Math.min(completedJobs, 10);
-
+      // ── TIER 4: Proximity within 5km (0–15 points) ──
+      let proximityScore = 0;
       if (worker.latitude && worker.longitude && job.latitude && job.longitude) {
         const R = 6371;
         const dLat = ((parseFloat(job.latitude) - parseFloat(worker.latitude)) * Math.PI) / 180;
@@ -62,13 +62,26 @@ const suggestWorkers = async (req, res) => {
           Math.sin(dLon / 2) * Math.sin(dLon / 2);
         const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         const distance = R * c;
-        if (distance <= 5) score += 10;
+        if (distance <= 5) proximityScore = 15;
       }
 
-      return { ...worker, score: Math.round(score), skill_matched };
+      // ── TIER 5: Completed jobs experience (0–5 points) ──
+      const completedJobs = parseInt(worker.completed_jobs) || 0;
+      const experienceScore = Math.min(completedJobs, 5);
+
+      // Sub-score used for ranking within each skill-match tier
+      const subScore = ratingScore + availabilityScore + proximityScore + experienceScore;
+
+      return { ...worker, score: Math.round(subScore), skill_matched };
     });
 
-    scored.sort((a, b) => b.score - a.score);
+    // Sort: skill-matched workers ALWAYS come first, then sort within each group by sub-score
+    scored.sort((a, b) => {
+      if (a.skill_matched !== b.skill_matched) {
+        return a.skill_matched ? -1 : 1; // skill match = top of list
+      }
+      return b.score - a.score; // within same tier: higher sub-score wins
+    });
 
     res.status(200).json({ suggested_workers: scored.slice(0, 10) });
 

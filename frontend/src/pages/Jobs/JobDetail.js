@@ -11,9 +11,11 @@ const JobDetail = () => {
   const [suggestions, setSuggestions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [applying, setApplying] = useState(false);
+  const [applicationStatus, setApplicationStatus] = useState(null); // null=not applied, 'pending','accepted','rejected'
 
   useEffect(() => {
     fetchJob();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId]);
 
   const fetchJob = async () => {
@@ -31,6 +33,17 @@ const JobDetail = () => {
           console.error('Failed to fetch suggestions:', err.message);
         }
       }
+      // If worker, check if they've already applied
+      if (user && user.role === 'worker') {
+        try {
+          const myApps = await axios.get(
+            'http://localhost:5000/api/applications/my-applications',
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          const existing = (myApps.data.applications || []).find(a => a.job_id === jobId);
+          if (existing) setApplicationStatus(existing.status || 'pending');
+        } catch (e) {}
+      }
     } catch (err) {
       console.error('Failed to fetch job:', err.message);
     } finally {
@@ -46,8 +59,7 @@ const JobDetail = () => {
         {},
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      alert('Application submitted successfully!');
-      navigate('/worker-dashboard');
+      setApplicationStatus('pending');
     } catch (err) {
       alert(err.response?.data?.message || 'Failed to apply.');
     } finally {
@@ -117,25 +129,47 @@ const JobDetail = () => {
 
           <div style={styles.actionButtons}>
             {user && user.role === 'worker' && job.status === 'open' && (
-              <button
-                style={applying ? styles.btnDisabled : styles.btnApply}
-                onClick={applyForJob}
-                disabled={applying}
-              >
-                {applying ? 'Applying...' : 'Apply for this Job'}
-              </button>
+              applicationStatus ? (
+                <div style={{
+                  padding: '12px 20px', borderRadius: '10px', fontWeight: '700', fontSize: '14px',
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                  backgroundColor: applicationStatus === 'accepted' ? '#d1fae5' : applicationStatus === 'rejected' ? '#fee2e2' : '#fef3c7',
+                  color: applicationStatus === 'accepted' ? '#065f46' : applicationStatus === 'rejected' ? '#991b1b' : '#92400e',
+                  border: `1.5px solid ${applicationStatus === 'accepted' ? '#6ee7b7' : applicationStatus === 'rejected' ? '#fca5a5' : '#fcd34d'}`,
+                }}>
+                  {applicationStatus === 'accepted' && '✅ You have been selected for this job!'}
+                  {applicationStatus === 'rejected' && '❌ You were not selected for this job.'}
+                  {applicationStatus === 'pending' && '⏳ Application Submitted — Under Review'}
+                </div>
+              ) : (
+                <button
+                  style={applying ? styles.btnDisabled : styles.btnApply}
+                  onClick={applyForJob}
+                  disabled={applying}
+                >
+                  {applying ? 'Applying...' : '✋ Apply for this Job'}
+                </button>
+              )
+            )}
+            {user && user.role === 'worker' && job.status !== 'open' && applicationStatus && (
+              <div style={{
+                padding: '12px 20px', borderRadius: '10px', fontWeight: '700', fontSize: '14px',
+                display: 'flex', alignItems: 'center', gap: '8px',
+                backgroundColor: applicationStatus === 'accepted' ? '#d1fae5' : applicationStatus === 'rejected' ? '#fee2e2' : '#fef3c7',
+                color: applicationStatus === 'accepted' ? '#065f46' : applicationStatus === 'rejected' ? '#991b1b' : '#92400e',
+                border: `1.5px solid ${applicationStatus === 'accepted' ? '#6ee7b7' : applicationStatus === 'rejected' ? '#fca5a5' : '#fcd34d'}`,
+              }}>
+                {applicationStatus === 'accepted' && '✅ You were selected — Job is now ' + job.status.replace('_',' ')}
+                {applicationStatus === 'rejected' && '❌ You were not selected for this job.'}
+                {applicationStatus === 'pending' && '⏳ Application Submitted — Under Review'}
+              </div>
             )}
             <button
               style={styles.btnChat}
               onClick={() => navigate(`/chat/${jobId}`)}
             >
-              Open Chat
+              💬 Chat
             </button>
-            {user && user.role === 'worker' && job.customer_phone && (
-              <a href={`tel:${job.customer_phone}`} style={styles.btnCall}>
-                Call Customer
-              </a>
-            )}
             {user && user.role === 'customer' && (
               <button
                 style={styles.btnTrack}
@@ -344,7 +378,7 @@ const styles = {
     cursor: 'pointer',
     fontSize: '16px',
   },
-  btnCall: {
+  _btnCall_removed: {
     backgroundColor: '#10b981',
     color: '#fff',
     border: 'none',

@@ -8,7 +8,7 @@ require('dotenv').config();
 // POST /api/auth/register
 // =====================
 const register = async (req, res) => {
-  const { full_name, email, phone, password, role, skills } = req.body;
+  const { full_name, email, phone, password, role, skills, address } = req.body;
 
   if (!full_name || !email || !phone || !password || !role) {
     return res.status(400).json({ message: 'All fields are required.' });
@@ -43,10 +43,10 @@ if (role !== 'customer' && role !== 'worker' && role !== 'admin') {
     const password_hash = await bcrypt.hash(password, salt);
 
     const newUser = await pool.query(
-      `INSERT INTO users (full_name, email, phone, password_hash, role)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, full_name, email, phone, role, created_at`,
-      [full_name, email, phone, password_hash, role]
+      `INSERT INTO users (full_name, email, phone, password_hash, role, address)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, full_name, email, phone, role, address, created_at`,
+      [full_name, email, phone, password_hash, role, address || null]
     );
 
     const user = newUser.rows[0];
@@ -101,6 +101,13 @@ const login = async (req, res) => {
     }
 
     const user = result.rows[0];
+
+    // Check if user is banned
+    if (user.is_banned) {
+      return res.status(403).json({
+        message: `Your account has been banned. Reason: ${user.ban_reason || 'Policy violation'}. Please contact support.`,
+      });
+    }
 
     // Step 3: Compare entered password with hashed password in database
     const isMatch = await bcrypt.compare(password, user.password_hash);
@@ -157,7 +164,7 @@ const login = async (req, res) => {
 const getProfile = async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, full_name, email, phone, role, created_at FROM users WHERE id = $1',
+      'SELECT id, full_name, email, phone, role, address, created_at FROM users WHERE id = $1',
       [req.user.id]
     );
     if (result.rows.length === 0) {
@@ -171,14 +178,15 @@ const getProfile = async (req, res) => {
 };
 
 const updateProfile = async (req, res) => {
-  const { full_name, phone } = req.body;
+  const { full_name, phone, address } = req.body;
   try {
     const result = await pool.query(
       `UPDATE users SET
         full_name = COALESCE($1, full_name),
-        phone = COALESCE($2, phone)
-       WHERE id = $3 RETURNING id, full_name, email, phone, role`,
-      [full_name, phone, req.user.id]
+        phone = COALESCE($2, phone),
+        address = COALESCE($3, address)
+       WHERE id = $4 RETURNING id, full_name, email, phone, role, address`,
+      [full_name, phone, address || null, req.user.id]
     );
     res.status(200).json({ message: 'Profile updated!', user: result.rows[0] });
   } catch (err) {
